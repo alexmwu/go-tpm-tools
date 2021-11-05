@@ -31,7 +31,7 @@ func ExampleParseMachineState() {
 
 	// Verifier replays the event log.
 	// TODO: validate the PCRs against a quote. See the Quote examle.
-	_, err = ParseMachineState(evtLog, pcrs)
+	_, err = ParseMachineState(evtLog, pcrs, ParseOpts{})
 	if err != nil {
 		// TODO: handle parsing or replay error.
 		log.Fatalf("failed to read PCRs: %v", err)
