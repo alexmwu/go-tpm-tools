@@ -29,9 +29,10 @@ var (
 type Bootloader int
 
 const (
-	// A second-stage bootloader is unused or of an unsupported type.
+	// UNSUPPORTED refers to a second-stage bootloader that is unused or of an
+	// unsupported type.
 	UNSUPPORTED Bootloader = iota
-	// GNU GRUB.
+	// GRUB (https://www.gnu.org/software/grub/).
 	GRUB
 )
 
