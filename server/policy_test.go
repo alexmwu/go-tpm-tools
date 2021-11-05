@@ -71,7 +71,7 @@ func TestEvaluatePolicy(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			machineState, err := ParseMachineState(test.log.RawLog, test.log.Banks[0])
+			machineState, err := ParseMachineState(test.log.RawLog, test.log.Banks[0], ParseOpts{})
 			if err != nil {
 				t.Fatalf("failed to get machine state: %v", err)
 			}
@@ -89,7 +89,7 @@ func TestEvaluatePolicySCRTM(t *testing.T) {
 				0x4e, 0xf4, 0xbf, 0x17, 0xb8, 0x3a}},
 		},
 	}
-	machineState, err := ParseMachineState(ArchLinuxWorkstation.RawLog, ArchLinuxWorkstation.Banks[0])
+	machineState, err := ParseMachineState(ArchLinuxWorkstation.RawLog, ArchLinuxWorkstation.Banks[0], ParseOpts{})
 	if err != nil {
 		t.Fatalf("failed to get machine state: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestEvaluatePolicyFailure(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			machineState, err := ParseMachineState(test.log.RawLog, test.log.Banks[0])
+			machineState, err := ParseMachineState(test.log.RawLog, test.log.Banks[0], ParseOpts{})
 			if err != nil {
 				t.Fatalf("failed to get machine state: %v", err)
 			}

@@ -30,6 +30,8 @@ type VerifyOpts struct {
 	// supports the legacy event log format. This is the case on older Linux
 	// distributions (such as Debian 10).
 	AllowSHA1 bool
+	// Options to ParseMachineState. Important if GRUB command parsing is desirable.
+	Parse ParseOpts
 }
 
 // VerifyAttestation performs the following checks on an Attestation:
@@ -79,7 +81,7 @@ func VerifyAttestation(attestation *pb.Attestation, opts VerifyOpts) (*pb.Machin
 
 		// Parse the event log and replay the events against the provided PCRs
 		pcrs := quote.GetPcrs()
-		state, err := ParseMachineState(attestation.GetEventLog(), pcrs)
+		state, err := ParseMachineState(attestation.GetEventLog(), pcrs, opts.Parse)
 		if err != nil {
 			lastErr = fmt.Errorf("failed to validate the event log: %w", err)
 			continue

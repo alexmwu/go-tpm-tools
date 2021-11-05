@@ -49,7 +49,7 @@ type ParseOpts struct {
 // It is the caller's responsibility to ensure that the passed PCR values can be
 // trusted. Users can establish trust in PCR values by either calling
 // client.ReadPCRs() themselves or by verifying the values via a PCR quote.
-func ParseMachineState(rawEventLog []byte, pcrs *tpmpb.PCRs) (*pb.MachineState, error) {
+func ParseMachineState(rawEventLog []byte, pcrs *tpmpb.PCRs, opts ParseOpts) (*pb.MachineState, error) {
 	events, err := parseReplayHelper(rawEventLog, pcrs)
 	if err != nil {
 		return nil, err
