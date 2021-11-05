@@ -13,6 +13,35 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
+var (
+	// See https://www.gnu.org/software/grub/manual/grub/grub.html#Measured-Boot.
+	validPrefixes = [][]byte{[]byte("grub_cmd: "),
+		[]byte("kernel_cmdline: "),
+		[]byte("module_cmdline: "),
+		// Older style prefixes:
+		// https://src.fedoraproject.org/rpms/grub2/blob/c789522f7cfa19a10cd716a1db24dab5499c6e5c/f/0224-Rework-TPM-measurements.patch
+		[]byte("grub_kernel_cmdline "),
+		[]byte("grub_cmd ")}
+)
+
+// Bootloader refers to the second-stage bootloader that loads and transfers
+// execution to the OS kernel.
+type Bootloader int
+
+const (
+	// A second-stage bootloader is unused or of an unsupported type.
+	UNSUPPORTED Bootloader = iota
+	// GNU GRUB.
+	GRUB
+)
+
+// ParseOpts configures the behavior of ParseMachineState.
+type ParseOpts struct {
+	// Which bootloader the instance uses. Pick UNSUPPORTED to skip this
+	// parsing or for unsupported bootloaders (e.g., systemd).
+	Loader Bootloader
+}
+
 // ParseMachineState parses a raw event log and replays the parsed event
 // log against the given PCR values. It returns the corresponding MachineState
 // containing the events verified by particular PCR indexes/digests. It returns
