@@ -14,13 +14,15 @@ import (
 )
 
 var (
+	newGrubKernelCmdlinePrefix = []byte("kernel_cmdline: ")
+	oldGrubKernelCmdlinePrefix = []byte("grub_kernel_cmdline ")
 	// See https://www.gnu.org/software/grub/manual/grub/grub.html#Measured-Boot.
 	validPrefixes = [][]byte{[]byte("grub_cmd: "),
-		[]byte("kernel_cmdline: "),
+		newGrubKernelCmdlinePrefix,
 		[]byte("module_cmdline: "),
 		// Older style prefixes:
 		// https://src.fedoraproject.org/rpms/grub2/blob/c789522f7cfa19a10cd716a1db24dab5499c6e5c/f/0224-Rework-TPM-measurements.patch
-		[]byte("grub_kernel_cmdline "),
+		oldGrubKernelCmdlinePrefix,
 		[]byte("grub_cmd ")}
 )
 
@@ -41,6 +43,8 @@ type ParseOpts struct {
 	// Which bootloader the instance uses. Pick UNSUPPORTED to skip this
 	// parsing or for unsupported bootloaders (e.g., systemd).
 	Loader Bootloader
+	// Whether to parse out a dm-verity state
+	ParseVerity bool
 }
 
 // ParseMachineState parses a raw event log and replays the parsed event
@@ -73,19 +77,26 @@ func ParseMachineState(rawEventLog []byte, pcrs *tpmpb.PCRs, opts ParseOpts) (*p
 	}
 
 	var grub *pb.GrubState
+	var kernel *pb.LinuxKernelState
 	if opts.Loader == GRUB {
 		grub, err = getGrubState(cryptoHash, rawEvents)
 		if err != nil {
 			// TODO(wuale): replace with SecureBoot changes for GroupedError
 			return &pb.MachineState{}, err
 		}
+		kernel, err = getLinuxKernelStateFromGRUB(grub, opts.ParseVerity)
+		// TODO(wuale): replace with changes for GroupedError
+		if err != nil {
+			return &pb.MachineState{}, err
+		}
 	}
 
 	return &pb.MachineState{
-		Platform:  platform,
-		RawEvents: rawEvents,
-		Hash:      pcrs.GetHash(),
-		Grub:      grub,
+		Platform:    platform,
+		RawEvents:   rawEvents,
+		Hash:        pcrs.GetHash(),
+		Grub:        grub,
+		LinuxKernel: kernel,
 	}, nil
 }
 
@@ -268,4 +279,85 @@ func getGrubState(hash crypto.Hash, events []*pb.Event) (*pb.GrubState, error) {
 		}
 	}
 	return &pb.GrubState{Files: files, Commands: commands}, nil
+}
+
+func getGrubKernelCmdlineSuffix(grubCmd []byte) int {
+	for _, prefix := range [][]byte{oldGrubKernelCmdlinePrefix, newGrubKernelCmdlinePrefix} {
+		if bytes.HasPrefix(grubCmd, prefix) {
+			return len(prefix)
+		}
+	}
+	return -1
+}
+
+// getDmVerityStateFromCmdline only supports the non-upstreamed ChromiumOS
+// dm-verity style arguments for now.
+// For example:
+// dm=1 vroot none ro 1,0 4077568 verity payload=<uuid> hashtree=<uuid> hashstart=4077568 alg=sha256 root_hexdigest=<digest> salt=<digest>
+// See:
+// https://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform2/verity/README.md
+func getDmVerityStateFromCmdline(paramToVal map[string]string) (*pb.DmVerityState, error) {
+	if dmLine, ok := paramToVal["dm"]; ok {
+		dmArgs := parseArgs([]byte(dmLine))
+
+		hashAlg, ok := dmArgs["alg"]
+		if !ok {
+			return nil, fmt.Errorf("algorithm not specified in dm-verity configuration")
+		}
+		if hashAlg != "sha256" {
+			return nil, fmt.Errorf("invalid hash algorithm \"%v\" specified in dm-verity configuration: only sha256 is supported", hashAlg)
+		}
+
+		rootDigestStr, ok := dmArgs["root_hexdigest"]
+		if !ok {
+			return nil, fmt.Errorf("root digest not specified in dm-verity configuration")
+		}
+		rootDigestBytes, err := hex.DecodeString(rootDigestStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid hex specified for root digest in dm-verity configuration: %v", err)
+		}
+
+		saltStr, ok := dmArgs["salt"]
+		if !ok {
+			return nil, fmt.Errorf("salt not specified in dm-verity configuration")
+		}
+		saltBytes, err := hex.DecodeString(saltStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid hex specified for root digest in dm-verity configuration: %v", err)
+		}
+
+		return &pb.DmVerityState{HashAlg: tpmpb.HashAlgo_SHA256, RootDigest: rootDigestBytes, Salt: saltBytes}, nil
+	}
+	return nil, fmt.Errorf("supported dm-verity arg not found")
+}
+
+func getLinuxKernelStateFromGRUB(grub *pb.GrubState, parseVerity bool) (*pb.LinuxKernelState, error) {
+	var cmdline string
+	var err error
+	var verity *pb.DmVerityState
+	seen := false
+
+	for _, command := range grub.GetCommands() {
+		// GRUB config is always in UTF-8: https://www.gnu.org/software/grub/manual/grub/html_node/Internationalisation.html.
+		cmdBytes := []byte(command)
+		suffixAt := getGrubKernelCmdlineSuffix(cmdBytes)
+		if suffixAt == -1 {
+			continue
+		}
+
+		if seen {
+			return nil, fmt.Errorf("more than one kernel commandline in GRUB commands")
+		}
+		seen = true
+		cmdline = command[suffixAt:]
+
+		if parseVerity {
+			verity, err = getDmVerityStateFromCmdline(parseArgs(cmdBytes))
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return &pb.LinuxKernelState{CommandLine: cmdline, Verity: verity}, nil
 }
