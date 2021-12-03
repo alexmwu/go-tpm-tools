@@ -20,4 +20,6 @@ var (
 	Ubuntu2104NoSecureBootEventLog []byte
 	//go:embed eventlogs/cos-85-amd-sev.bin
 	Cos85AmdSevEventLog []byte
+	//go:embed eventlogs/cos-93-amd-sev.bin
+	Cos93AmdSevEventLog []byte
 )
