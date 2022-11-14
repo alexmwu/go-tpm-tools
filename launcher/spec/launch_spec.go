@@ -99,7 +99,7 @@ func (s *LaunchSpec) UnmarshalJSON(b []byte) error {
 	// populate cmd override
 	if val, ok := unmarshaledMap[cmdKey]; ok && val != "" {
 		if err := json.Unmarshal([]byte(val), &s.Cmd); err != nil {
-			return err
+			return fmt.Errorf("failed to unmarshal \"%s\": \"%s\" should be a comma-separated, quoted JSON array", val, cmdKey)
 		}
 	}
 

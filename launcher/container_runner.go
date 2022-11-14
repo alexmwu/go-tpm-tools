@@ -112,10 +112,10 @@ func NewRunner(ctx context.Context, cdClient *containerd.Client, token oauth2.To
 	logger.Printf("Image Labels               : %v\n", imageLabels)
 	launchPolicy, err := spec.GetLaunchPolicy(imageLabels)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch container image launch policy: %v", err)
 	}
 	if err := launchPolicy.Verify(launchSpec); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to verify launch policy: %v", err)
 	}
 
 	if imageConfig, err := image.Config(ctx); err != nil {

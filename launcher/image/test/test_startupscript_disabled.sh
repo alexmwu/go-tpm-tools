@@ -6,7 +6,7 @@ echo 'Running startup script test'
 VM_NAME=$(cat /workspace/vm_name.txt)
 
 echo 'Sleeping to allow startup script to run'
-sleep 5
+sleep 150
 
 echo 'Reading from serial port:'
 SERIAL_OUTPUT=$(read_serial)

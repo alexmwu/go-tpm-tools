@@ -33,7 +33,7 @@ create_vm() {
   gcloud auth list
 
   gcloud compute instances create $VM_NAME --zone us-central1-a --image=$IMAGE_NAME --image-project=$PROJECT_NAME --shielded-secure-boot \
-  $APPEND_METADATA $APPEND_METADATA_FILE
+    --scopes=https://www.googleapis.com/auth/cloud-platform $APPEND_METADATA $APPEND_METADATA_FILE
 }
 
 IMAGE_NAME=''
