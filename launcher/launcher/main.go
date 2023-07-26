@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 	"strings"
 
 	"cloud.google.com/go/compute/metadata"
-	"cloud.google.com/go/logging"
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/defaults"
 	"github.com/containerd/containerd/namespaces"
@@ -44,7 +42,6 @@ var rcMessage = map[int]string{
 
 var logger *log.Logger
 var mdsClient *metadata.Client
-var launchSpec spec.LaunchSpec
 
 func main() {
 	var exitCode int
@@ -54,45 +51,17 @@ func main() {
 	log.SetOutput(os.Stdout)
 	logger.Println("TEE container launcher initiating")
 
-	defer func() {
-		// catch panic, will only output to stdout, because cloud logging closed
-		// This should rarely happen (almost impossible), the only place can panic
-		// recover here is in the deferred logClient.Close().
-		if r := recover(); r != nil {
-			logger.Println("Panic:", r)
-			exitCode = 2
-		}
-		os.Exit(exitCode)
-	}()
-
 	if err := verifyFsAndMount(); err != nil {
 		logger.Print(err)
 		exitCode = rebootRC
 		return
 	}
 
+	logger.Println("Logs will be published to Cloud Logging under the name 'confidential-space-launcher'. View logs here: https://cloud.google.com/container-optimized-os/docs/how-to/logging#access_logs")
+
+	// Get RestartPolicy and IsHardened from spec
 	mdsClient = metadata.NewClient(nil)
-	projectID, err := mdsClient.ProjectID()
-	if err != nil {
-		logger.Printf("cannot get projectID, not in GCE? %v", err)
-		// cannot get projectID from MDS, exit directly
-		exitCode = failRC
-		return
-	}
-
-	logClient, err := logging.NewClient(context.Background(), projectID)
-	if err != nil {
-		logger.Printf("cannot setup Cloud Logging, using the default stdout logger %v", err)
-	} else {
-		defer logClient.Close()
-		logger.Printf("logs will be published to Cloud Logging under the log name %s\n", logName)
-		logger = logClient.Logger(logName).StandardLogger(logging.Info)
-		loggerAndStdout := io.MultiWriter(os.Stdout, logger.Writer()) // for now also print log to stdout
-		logger.SetOutput(loggerAndStdout)
-	}
-
-	// get restart policy and ishardened from spec
-	launchSpec, err = spec.GetLaunchSpec(mdsClient)
+	launchSpec, err := spec.GetLaunchSpec(mdsClient)
 	if err != nil {
 		logger.Println(err)
 		// if cannot get launchSpec, exit directly
@@ -102,10 +71,10 @@ func main() {
 
 	defer func() {
 		// catch panic, will also output to cloud logging if possible
-		if r := recover(); r != nil {
-			logger.Println("Panic:", r)
-			exitCode = 2
-		}
+		// if r := recover(); r != nil {
+		// 	logger.Println("Panic:", r)
+		// 	exitCode = 2
+		// }
 		msg, ok := rcMessage[exitCode]
 		if ok {
 			logger.Printf("TEE container launcher exiting with exit code: %d (%s)\n", exitCode, msg)
@@ -113,7 +82,7 @@ func main() {
 			logger.Printf("TEE container launcher exiting with exit code: %d\n", exitCode)
 		}
 	}()
-	if err = startLauncher(); err != nil {
+	if err = startLauncher(launchSpec); err != nil {
 		logger.Println(err)
 	}
 
@@ -152,7 +121,7 @@ func getExitCode(isHardened bool, restartPolicy spec.RestartPolicy, err error) i
 	return exitCode
 }
 
-func startLauncher() error {
+func startLauncher(launchSpec spec.LaunchSpec) error {
 	logger.Printf("Launch Spec: %+v\n", launchSpec)
 	containerdClient, err := containerd.New(defaults.DefaultAddress)
 	if err != nil {
