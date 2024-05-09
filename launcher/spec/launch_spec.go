@@ -11,8 +11,11 @@ import (
 	"strings"
 
 	"cloud.google.com/go/compute/metadata"
+
+	"github.com/google/go-tpm-tools/cel"
 	"github.com/google/go-tpm-tools/launcher/internal/experiments"
 	"github.com/google/go-tpm-tools/verifier/util"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const MaxInt64 = int(^uint64(0) >> 1)
@@ -71,12 +74,23 @@ const (
 	logRedirectKey             = "tee-container-log-redirect"
 	memoryMonitoringEnable     = "tee-monitoring-memory-enable"
 	devShmSizeKey              = "tee-dev-shm-size"
+	mountKey                   = "tee-mount"
 )
 
 const (
 	instanceAttributesQuery = "instance/attributes/?recursive=true"
 )
 
+const (
+	mountTypeKey        = "type"
+	mountSourceKey      = "source"
+	mountDestinationKey = "destination"
+	mountTypeTmpfs      = "tmpfs"
+	mountTypeBind       = "bind"
+	mountTypeGCEDisk    = "gcedisk"
+)
+
+// https://cloud.google.com/compute/docs/disks/set-persistent-device-name-in-linux-vm
 var errImageRefNotSpecified = fmt.Errorf("%s is not specified in the custom metadata", imageRefKey)
 
 // EnvVar represent a single environment variable key/value pair.
@@ -101,6 +115,7 @@ type LaunchSpec struct {
 	Hardened                   bool
 	MemoryMonitoringEnabled    bool
 	LogRedirect                LogRedirectLocation
+	Mounts                     []specs.Mount
 	DevShmSize                 int64
 	Experiments                experiments.Experiments
 }
@@ -119,7 +134,7 @@ func (s *LaunchSpec) UnmarshalJSON(b []byte) error {
 	}
 
 	s.RestartPolicy = RestartPolicy(unmarshaledMap[restartPolicyKey])
-	// set the default restart policy to "Never" for now
+	// Set the default restart policy to "Never" for now.
 	if s.RestartPolicy == "" {
 		s.RestartPolicy = Never
 	}
@@ -143,14 +158,14 @@ func (s *LaunchSpec) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	// populate cmd override
+	// Populate cmd override.
 	if val, ok := unmarshaledMap[cmdKey]; ok && val != "" {
 		if err := json.Unmarshal([]byte(val), &s.Cmd); err != nil {
 			return err
 		}
 	}
 
-	// populate all env vars
+	// Populate all env vars.
 	for k, v := range unmarshaledMap {
 		if strings.HasPrefix(k, envKeyPrefix) {
 			s.Envs = append(s.Envs, EnvVar{strings.TrimPrefix(k, envKeyPrefix), v})
@@ -168,6 +183,7 @@ func (s *LaunchSpec) UnmarshalJSON(b []byte) error {
 
 	s.AttestationServiceAddr = unmarshaledMap[attestationServiceAddrKey]
 
+	// Populate /dev/shm size override.
 	if val, ok := unmarshaledMap[devShmSizeKey]; ok && val != "" {
 		size, err := strconv.ParseUint(val, 10, 64)
 		if err != nil {
@@ -185,6 +201,21 @@ func (s *LaunchSpec) UnmarshalJSON(b []byte) error {
 		}
 		s.DevShmSize = int64(size)
 	}
+
+	// Populate mount override.
+	// https://cloud.google.com/compute/docs/disks/set-persistent-device-name-in-linux-vm
+	// https://cloud.google.com/compute/docs/disks/add-local-ssd
+	if val, ok := unmarshaledMap[mountKey]; ok && val != "" {
+		mounts := strings.Split(val, ";")
+		for _, mount := range mounts {
+			specMnt, err := processMount(mount)
+			if err != nil {
+				return err
+			}
+			s.Mounts = append(s.Mounts, specMnt)
+		}
+	}
+
 	return nil
 }
 
@@ -229,6 +260,47 @@ func isHardened(kernelCmd string) bool {
 		}
 	}
 	return false
+}
+
+func processMount(singleMount string) (specs.Mount, error) {
+	mntConfig := make(map[string]string)
+	var mntType string
+	mountOpts := strings.Split(singleMount, ",")
+	for _, mountOpt := range mountOpts {
+		name, val, err := cel.ParseEnvVar(mountOpt)
+		if err != nil {
+			return specs.Mount{}, fmt.Errorf("failed to parse mount option: %w", err)
+		}
+		switch name {
+		case mountTypeKey:
+			mntType = val
+		case mountSourceKey:
+		case mountDestinationKey:
+		default:
+			return specs.Mount{}, fmt.Errorf("found unknown mount option: %v, expect keys of [%v, %v, %v]", mountOpt, mountTypeKey, mountSourceKey, mountDestinationKey)
+		}
+		mntConfig[name] = val
+	}
+
+	switch mntType {
+	case mountTypeTmpfs:
+		mntDst, ok := mntConfig[mountDestinationKey]
+		if !ok {
+			return specs.Mount{}, fmt.Errorf("found bad tmpfs mount config %v, expect exact keys [%v, %v]", mountOpts, mountTypeKey, mountDestinationKey)
+		}
+		return specs.Mount{Type: mountTypeTmpfs, Destination: mntDst}, nil
+	case mountTypeGCEDisk:
+		mntSrc, okSrc := mntConfig[mountSourceKey]
+		mntDst, okDst := mntConfig[mountDestinationKey]
+		if !(okSrc && okDst) {
+			return specs.Mount{}, fmt.Errorf("found bad bind mount config %v, expect exact keys [%v, %v, %v]", mountOpts, mountTypeKey, mountSourceKey, mountDestinationKey)
+		}
+		// TODO: check valid sources with prefix /dev/disk/by-id/google-*.
+		// overwrite the source with integrity fs .sh
+		return specs.Mount{Type: mountTypeBind, Source: mntSrc, Destination: mntDst, Options: []string{"rbind", "rw"}}, nil
+	default:
+		return specs.Mount{}, fmt.Errorf("found unknown or unspecified mount type: %v, expect one of types [%v, %v]", mountOpts, mountTypeTmpfs, mountTypeGCEDisk)
+	}
 }
 
 func getLinuxFreeMem() (uint64, error) {

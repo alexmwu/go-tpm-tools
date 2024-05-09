@@ -73,6 +73,16 @@ const (
 	defaultRefreshJitter = 0.1
 )
 
+var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func randSeq(n int) string {
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(b)
+}
+
 // NewRunner returns a runner.
 func NewRunner(ctx context.Context, cdClient *containerd.Client, token oauth2.Token, launchSpec spec.LaunchSpec, mdsClient *metadata.Client, tpm io.ReadWriteCloser, logger *log.Logger, serialConsole *os.File) (*ContainerRunner, error) {
 	image, err := initImage(ctx, cdClient, launchSpec, token)
@@ -80,7 +90,7 @@ func NewRunner(ctx context.Context, cdClient *containerd.Client, token oauth2.To
 		return nil, err
 	}
 
-	mounts := make([]specs.Mount, 0)
+	mounts := launchSpec.Mounts
 	mounts = appendTokenMounts(mounts)
 
 	envs, err := formatEnvVars(launchSpec.Envs)
@@ -138,11 +148,12 @@ func NewRunner(ctx context.Context, cdClient *containerd.Client, token oauth2.To
 		Soft: nofile,
 	}}
 
+	randSuffix := randSeq(8)
 	container, err = cdClient.NewContainer(
 		ctx,
-		containerID,
+		containerID+randSuffix,
 		containerd.WithImage(image),
-		containerd.WithNewSnapshot(snapshotID, image),
+		containerd.WithNewSnapshot(snapshotID+randSuffix, image),
 		containerd.WithNewSpec(
 			oci.WithImageConfigArgs(image, launchSpec.Cmd),
 			oci.WithEnv(envs),
@@ -495,9 +506,9 @@ func (r *ContainerRunner) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to measure CEL events: %v", err)
 	}
 
-	if err := r.fetchAndWriteToken(ctx); err != nil {
-		return fmt.Errorf("failed to fetch and write OIDC token: %v", err)
-	}
+	// if err := r.fetchAndWriteToken(ctx); err != nil {
+	// 	return fmt.Errorf("failed to fetch and write OIDC token: %v", err)
+	// }
 
 	r.logger.Printf("EnableTestFeatureForImage is set to %v\n", r.launchSpec.Experiments.EnableTestFeatureForImage)
 	// create and start the TEE server behind the experiment
@@ -550,6 +561,8 @@ func (r *ContainerRunner) Run(ctx context.Context) error {
 		return fmt.Errorf("unknown logging redirect location: %v", r.launchSpec.LogRedirect)
 	}
 
+	w := io.MultiWriter(os.Stdout, r.serialConsole)
+	streamOpt = cio.WithStreams(nil, w, w)
 	task, err := r.container.NewTask(ctx, cio.NewCreator(streamOpt))
 	if err != nil {
 		return &RetryableError{err}
@@ -563,6 +576,7 @@ func (r *ContainerRunner) Run(ctx context.Context) error {
 	r.logger.Println("workload task started")
 
 	if err := task.Start(ctx); err != nil {
+		r.logger.Println(err)
 		return &RetryableError{err}
 	}
 	status := <-exitStatusC
@@ -572,6 +586,9 @@ func (r *ContainerRunner) Run(ctx context.Context) error {
 		return err
 	}
 
+	r.logger.Println(status.Error())
+	r.logger.Println(status.ExitCode())
+	r.logger.Println(status.ExitTime())
 	if code != 0 {
 		r.logger.Println("workload task ended and returned non-zero")
 		return &WorkloadError{code}
