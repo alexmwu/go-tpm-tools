@@ -18,7 +18,8 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-const MaxInt64 = int(^uint64(0) >> 1)
+// MaxInt64 is the maximum value of a signed int64.
+const MaxInt64 = 9223372036854775807
 
 // RestartPolicy is the enum for the container restart policy.
 type RestartPolicy string
@@ -87,10 +88,10 @@ const (
 	mountDestinationKey = "destination"
 	mountTypeTmpfs      = "tmpfs"
 	mountTypeBind       = "bind"
-	mountTypeGCEDisk    = "gcedisk"
+	// https://cloud.google.com/compute/docs/disks/set-persistent-device-name-in-linux-vm
+	mountTypeGCEDisk = "gcedisk"
 )
 
-// https://cloud.google.com/compute/docs/disks/set-persistent-device-name-in-linux-vm
 var errImageRefNotSpecified = fmt.Errorf("%s is not specified in the custom metadata", imageRefKey)
 
 // EnvVar represent a single environment variable key/value pair.
@@ -290,16 +291,24 @@ func processMount(singleMount string) (specs.Mount, error) {
 		}
 		return specs.Mount{Type: mountTypeTmpfs, Destination: mntDst}, nil
 	case mountTypeGCEDisk:
-		mntSrc, okSrc := mntConfig[mountSourceKey]
-		mntDst, okDst := mntConfig[mountDestinationKey]
-		if !(okSrc && okDst) {
-			return specs.Mount{}, fmt.Errorf("found bad bind mount config %v, expect exact keys [%v, %v, %v]", mountOpts, mountTypeKey, mountSourceKey, mountDestinationKey)
-		}
-		// TODO: check valid sources with prefix /dev/disk/by-id/google-*.
-		// overwrite the source with integrity fs .sh
-		return specs.Mount{Type: mountTypeBind, Source: mntSrc, Destination: mntDst, Options: []string{"rbind", "rw"}}, nil
+		return specs.Mount{}, fmt.Errorf("found unknown or unspecified mount type: %v, expect one of types [%v]", mountOpts, mountTypeTmpfs)
+		/*
+			underlyingSrc, okSrc := mntConfig[mountSourceKey]
+			mntDst, okDst := mntConfig[mountDestinationKey]
+			if !(okSrc && okDst) {
+				return specs.Mount{}, fmt.Errorf("found bad gcedisk mount config %v, expect exact keys [%v, %v, %v]", mountOpts, mountTypeKey, mountSourceKey, mountDestinationKey)
+			}
+
+			log.Println(underlyingSrc, mntDst)
+			log.Println("underlyingSrc, mntDst")
+			mntSrc, err := processGCEDiskMount(underlyingSrc)
+			if err != nil {
+				return specs.Mount{}, fmt.Errorf("failed to create integrity FS from %v: %v", underlyingSrc, err)
+			}
+			return specs.Mount{Type: mountTypeBind, Source: mntSrc, Destination: mntDst, Options: []string{"rbind", "rw"}}, nil
+		*/
 	default:
-		return specs.Mount{}, fmt.Errorf("found unknown or unspecified mount type: %v, expect one of types [%v, %v]", mountOpts, mountTypeTmpfs, mountTypeGCEDisk)
+		return specs.Mount{}, fmt.Errorf("found unknown or unspecified mount type: %v, expect one of types [%v]", mountOpts, mountTypeTmpfs)
 	}
 }
 
@@ -332,3 +341,55 @@ func readCmdline() (string, error) {
 	}
 	return string(kernelCmd), nil
 }
+
+/*
+// processGCEDiskMount takes a GCE attached disk mount type, creates an
+// integrity file-system on the disk, and then mounts the file-system.
+// It returns the mount path on success.
+func processGCEDiskMount(attachedDiskName string) (string, error) {
+	diskNamePattern := "^[a-zA-Z0-9-]*$"
+	validNameRegexp := regexp.MustCompile(diskNamePattern)
+	if !validNameRegexp.MatchString(attachedDiskName) {
+		return "", fmt.Errorf("got malformed disk name: must match regexp \"%v\"", diskNamePattern)
+	}
+	diskSymlink := "/dev/disk/by-id/google-" + attachedDiskName
+	diskInfo, err := os.Stat(diskSymlink)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("could not find specified disk at %v", diskSymlink)
+		}
+		return "", fmt.Errorf("failed to stat file %v: %w", diskSymlink, err)
+	}
+	if diskInfo.Mode().Type() != os.ModeDevice {
+		return "", fmt.Errorf("found a non-device file %v of type: %v", diskSymlink, diskInfo.Mode())
+	}
+
+	underlyingDev, err := filepath.EvalSymlinks(diskSymlink)
+	if err != nil {
+		return "", fmt.Errorf("failed to eval symlink for %v", diskSymlink)
+	}
+	log.Println(underlyingDev)
+	cmd, err := exec.Command("/usr/bin/cgpt", "create", underlyingDev).CombinedOutput()
+	log.Printf("cmd: %v", string(cmd))
+	if err != nil {
+		return "", fmt.Errorf("failed to setup integrity fs: %v, output: %v", err, cmd)
+	}
+
+	cmd, err = exec.Command("/var/lib/google/setup-integrity-fs-v2.sh", "m", underlyingDev, attachedDiskName+"2").CombinedOutput()
+	log.Printf("cmd: %v", string(cmd))
+	if err != nil {
+		return "", fmt.Errorf("failed to setup integrity fs: %v", err)
+	}
+
+	mntTgt := path.Join("/mnt", attachedDiskName)
+	if err := os.Mkdir(mntTgt, 0777); err != nil {
+		return "", fmt.Errorf("failed to make mount point for %v: %w", attachedDiskName, err)
+	}
+	mntSrc := path.Join("/dev/mapper", attachedDiskName)
+	if err := syscall.Mount(mntSrc, mntTgt, "ext4", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+		return "", fmt.Errorf("failed to mount on attached disk %v ext4 fs: %w", attachedDiskName, err)
+	}
+
+	return mntTgt, nil
+}
+*/
