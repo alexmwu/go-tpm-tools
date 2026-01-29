@@ -307,6 +307,61 @@ steps:
     gcloud builds submit --config=test_privileged.yaml --region us-west1 \
       --substitutions _IMAGE_NAME=${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX},_IMAGE_PROJECT=${PROJECT_ID}
     exit
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: ExportHardenedImage
+  waitFor: ['HardenedImageTests']
+  env:
+  - 'OUTPUT_IMAGE_PREFIX=${_OUTPUT_IMAGE_PREFIX}'
+  - 'OUTPUT_IMAGE_SUFFIX=${_OUTPUT_IMAGE_SUFFIX}'
+  - 'PROJECT_ID=$PROJECT_ID'
+  entrypoint: 'gcloud'
+  args: ['compute', 'images', 'export',
+         '--destination-uri=gs://${PROJECT_ID}_raw-images/${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}.tar.gz',
+         '--image=${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}',
+         '--project=${PROJECT_ID}']
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: ExportDebugImage
+  waitFor: ['DebugImageTests']
+  env:
+  - 'OUTPUT_IMAGE_PREFIX=${_OUTPUT_IMAGE_PREFIX}'
+  - 'OUTPUT_IMAGE_SUFFIX=${_OUTPUT_IMAGE_SUFFIX}'
+  - 'PROJECT_ID=$PROJECT_ID'
+  entrypoint: 'gcloud'
+  args: ['compute', 'images', 'export',
+          '--destination-uri=gs://${PROJECT_ID}_raw-images/${OUTPUT_IMAGE_PREFIX}-debug-${OUTPUT_IMAGE_SUFFIX}.tar.gz',
+          '--image=${OUTPUT_IMAGE_PREFIX}-debug-${OUTPUT_IMAGE_SUFFIX}',
+          '--project=${PROJECT_ID}']
+- name: 'us-docker.pkg.dev/confidential-space-images-dev/cs-tools/measure@sha256:9b3e7be3378c9a78bfca3ab140450c4d5669e5f651525ce4471f2df8c9b5a703'
+  id: MeasureHardenedImage
+  waitFor: ['ExportHardenedImage']
+  env:
+  - 'OUTPUT_IMAGE_PREFIX=${_OUTPUT_IMAGE_PREFIX}'
+  - 'OUTPUT_IMAGE_SUFFIX=${_OUTPUT_IMAGE_SUFFIX}'
+  - 'PROJECT_ID=$PROJECT_ID'
+  script: |
+    #!/usr/bin/env bash
+    echo "downloading hardened image ${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}"
+    gsutil cp gs://confidential-space-images-dev_raw-images/${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}.tar.gz .
+    tar -xzf ${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}.tar.gz
+
+    echo "measuring image ${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}"
+    /usr/local/bin/measure.sh disk.raw measure_output_hardened.json
+    gsutil cp measure_output_hardened.json gs://${PROJECT_ID}-dev-rims/${OUTPUT_IMAGE_PREFIX}-hardened-${OUTPUT_IMAGE_SUFFIX}.json
+- name: 'us-docker.pkg.dev/confidential-space-images-dev/cs-tools/measure@sha256:9b3e7be3378c9a78bfca3ab140450c4d5669e5f651525ce4471f2df8c9b5a703'
+  id: MeasureDebugImage
+  waitFor: ['ExportDebugImage']
+  env:
+  - 'OUTPUT_IMAGE_PREFIX=${_OUTPUT_IMAGE_PREFIX}'
+  - 'OUTPUT_IMAGE_SUFFIX=${_OUTPUT_IMAGE_SUFFIX}'
+  - 'PROJECT_ID=$PROJECT_ID'
+  script: |
+    #!/usr/bin/env bash
+    echo "downloading debug image ${OUTPUT_IMAGE_PREFIX}-debug-${OUTPUT_IMAGE_SUFFIX}"
+    gsutil cp gs://confidential-space-images-dev_raw-images/${OUTPUT_IMAGE_PREFIX}-debug-${OUTPUT_IMAGE_SUFFIX}.tar.gz .
+    tar -xzf ${OUTPUT_IMAGE_PREFIX}-debug-${OUTPUT_IMAGE_SUFFIX}.tar.gz
+    echo "measuring image ${OUTPUT_IMAGE_PREFIX}-debug-${OUTPUT_IMAGE_SUFFIX}"
+    /usr/local/bin/measure.sh disk.raw measure_output_debug.json
+    gsutil cp measure_output_debug.json gs://${PROJECT_ID}-dev-rims/${OUTPUT_IMAGE
 options:
   pool:
     name: 'projects/confidential-space-images-dev/locations/us-west1/workerPools/cs-image-build-vpc'
